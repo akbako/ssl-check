@@ -465,6 +465,85 @@ remove_server() {
   echo
 }
 
+# ── Пункт 4: alias ──────────────────────────────────────────────────────────
+ALIAS_BEGIN="# >>> ssl-check >>>"
+ALIAS_END="# <<< ssl-check <<<"
+SELF_PATH="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
+
+# Файл настроек оболочки, куда пишется alias (SSL_CHECK_RC — для переопределения).
+rc_file() {
+  if [ -n "${SSL_CHECK_RC:-}" ]; then printf '%s' "$SSL_CHECK_RC"; return; fi
+  case "$(basename "${SHELL:-}")" in
+    zsh)  printf '%s' "$HOME/.zshrc" ;;
+    bash) if [ "$(uname)" = Darwin ]; then printf '%s' "$HOME/.bash_profile"
+          else printf '%s' "$HOME/.bashrc"; fi ;;
+    *)    printf '%s' "$HOME/.profile" ;;
+  esac
+}
+
+alias_installed() { grep -qsF "$ALIAS_BEGIN" "$(rc_file)"; }
+
+alias_current_name() { # имя alias из установленного блока
+  sed -n "/^$ALIAS_BEGIN\$/,/^$ALIAS_END\$/p" "$(rc_file)" 2>/dev/null \
+    | sed -n "s/^alias \([^=]*\)=.*/\1/p" | head -n1
+}
+
+alias_remove_block() {
+  local rc="$1"
+  awk -v b="$ALIAS_BEGIN" -v e="$ALIAS_END" '
+    $0 == b { skip=1; next }
+    $0 == e { skip=0; next }
+    !skip { print }' "$rc" >"$rc.tmp" && mv "$rc.tmp" "$rc"
+}
+
+setup_alias() {
+  local rc name reply quoted
+  rc=$(rc_file)
+  bullet "${C_BOLD}Alias для быстрого запуска${C_RESET}"
+
+  if alias_installed; then
+    name=$(alias_current_name)
+    sub "Alias ${C_BOLD}${name}${C_RESET} уже установлен в ${C_GRAY}${rc}${C_RESET}"
+    printf '  %s⎿%s  %s1%s обновить · %s2%s удалить · %sEnter%s — отмена: ' "$C_GRAY" "$C_RESET" "$C_ORANGE" "$C_RESET" "$C_ORANGE" "$C_RESET" "$C_GRAY" "$C_RESET"
+    read -r reply || { echo; return; }
+    case "$reply" in
+      1) alias_remove_block "$rc" ;;
+      2) alias_remove_block "$rc"
+         sub "${C_GREEN}Alias удалён из ${rc##*/} ✓${C_RESET}"
+         sub "${C_GRAY}Чтобы он пропал в открытых окнах терминала, откройте новое окно.${C_RESET}"
+         echo; return ;;
+      *) sub "${C_GRAY}Отменено${C_RESET}"; echo; return ;;
+    esac
+  fi
+
+  while true; do
+    printf '  %s⎿%s  Имя alias %s(Enter — ssl-check)%s: ' "$C_GRAY" "$C_RESET" "$C_GRAY" "$C_RESET"
+    read -r name || { echo; return; }
+    name="${name:-ssl-check}"
+    [[ "$name" =~ ^[A-Za-z][A-Za-z0-9_-]*$ ]] && break
+    sub "${C_RED}Имя может содержать латинские буквы, цифры, «-» и «_» и начинаться с буквы.${C_RESET}"
+  done
+
+  quoted=${SELF_PATH//\'/\'\\\'\'}
+  sub "Будет добавлено в ${C_GRAY}${rc}${C_RESET}:"
+  sub "${C_GRAY}alias ${name}='${quoted}'${C_RESET}"
+  printf '  %s⎿%s  Продолжить? %s(y/n)%s: ' "$C_GRAY" "$C_RESET" "$C_GRAY" "$C_RESET"
+  read -r reply || { echo; return; }
+  case "$reply" in
+    y|Y|д|Д|да|Да|yes) ;;
+    *) sub "${C_GRAY}Отменено${C_RESET}"; echo; return ;;
+  esac
+
+  touch "$rc"
+  [ -s "$rc" ] && [ -n "$(tail -c1 "$rc")" ] && echo >>"$rc"
+  printf '%s\nalias %s='"'"'%s'"'"'\n%s\n' "$ALIAS_BEGIN" "$name" "$quoted" "$ALIAS_END" >>"$rc"
+
+  sub "${C_GREEN}Alias ${name} добавлен в ${rc##*/} ✓${C_RESET}"
+  sub "Чтобы он заработал, откройте новое окно терминала или выполните:"
+  sub "${C_BOLD}source ${rc}${C_RESET}"
+  echo
+}
+
 # ── Меню ────────────────────────────────────────────────────────────────────
 menu() {
   local choice
@@ -474,16 +553,22 @@ menu() {
     sub "${C_ORANGE}1${C_RESET}  Проверка всех серверов"
     sub "${C_ORANGE}2${C_RESET}  Добавить сервер"
     sub "${C_ORANGE}3${C_RESET}  Удалить сервер"
-    sub "${C_ORANGE}4${C_RESET}  Выйти"
-    printf '\n%s?%s  Выбор %s[1-4]%s: ' "$C_ORANGE" "$C_RESET" "$C_GRAY" "$C_RESET"
+    if alias_installed; then
+      sub "${C_ORANGE}4${C_RESET}  Alias ${C_GREEN}установлен ✓${C_RESET} ${C_GRAY}(обновить или удалить)${C_RESET}"
+    else
+      sub "${C_ORANGE}4${C_RESET}  Добавить alias для быстрого запуска ${C_ORANGE}(рекомендуется)${C_RESET}"
+    fi
+    sub "${C_ORANGE}5${C_RESET}  Выйти"
+    printf '\n%s?%s  Выбор %s[1-5]%s: ' "$C_ORANGE" "$C_RESET" "$C_GRAY" "$C_RESET"
     read -r choice || { echo; return; }
     echo
     case "$choice" in
       1) run_check_all ;;
       2) add_server ;;
       3) remove_server ;;
-      4|q|Q) printf '%s✻%s До встречи!\n\n' "$C_ORANGE" "$C_RESET"; return ;;
-      *) printf '  %sВведите число от 1 до 4.%s\n\n' "$C_RED" "$C_RESET" ;;
+      4) setup_alias ;;
+      5|q|Q) printf '%s✻%s До встречи!\n\n' "$C_ORANGE" "$C_RESET"; return ;;
+      *) printf '  %sВведите число от 1 до 5.%s\n\n' "$C_RED" "$C_RESET" ;;
     esac
   done
 }
